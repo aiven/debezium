@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.kafka.connect.errors.ConnectException;
@@ -294,15 +293,8 @@ public class PostgresConnection extends JdbcConnection {
         try {
             confirmedFlushedLsn = tryParseLsn(slotName, pluginName, database, rs, "confirmed_flush_lsn");
             if (confirmedFlushedLsn == null) {
-                LOGGER.debug("Failed to obtain valid replication slot, confirmed flush lsn is null");
-                AtomicBoolean hasConcurrentTransaction = new AtomicBoolean(false);
-                int connectionPID = ((PgConnection) connection()).getBackendPID();
-                query("select * from pg_stat_activity where state like 'idle in transaction' AND pid <> " + connectionPID, rset -> {
-                    if (rset.next()) {
-                        hasConcurrentTransaction.compareAndSet(false, true);
-                    }
-                });
-                if (!hasConcurrentTransaction.get()) {
+                LOGGER.info("Failed to obtain valid replication slot, confirmed flush lsn is null");
+                if (!hasIdleTransactions()) {
                     confirmedFlushedLsn = tryFallbackToRestartLsn(slotName, pluginName, database, rs);
                 }
             }
@@ -314,14 +306,28 @@ public class PostgresConnection extends JdbcConnection {
         return confirmedFlushedLsn;
     }
 
+    private boolean hasIdleTransactions() throws SQLException {
+        return queryAndMap(
+                "select * from pg_stat_activity where state like 'idle in transaction' AND application_name != '" + CONNECTION_GENERAL + "' AND pid <> pg_backend_pid()",
+                rs -> {
+                    if (rs.next()) {
+                        LOGGER.debug("Found at least one idle transaction with pid " + rs.getInt("pid") + " for application" + rs.getString("application_name"));
+                        return true;
+                    }
+                    else {
+                        return false;
+                    }
+                });
+    }
+
     private Lsn tryFallbackToRestartLsn(String slotName, String pluginName, String database, ResultSet rs) {
         Lsn confirmedFlushedLsn;
         LOGGER.info("Unable to find confirmed_flushed_lsn, falling back to restart_lsn");
         try {
             confirmedFlushedLsn = tryParseLsn(slotName, pluginName, database, rs, "restart_lsn");
         }
-        catch (SQLException e2) {
-            throw new ConnectException("Neither confirmed_flush_lsn nor restart_lsn could be found");
+        catch (SQLException e) {
+            throw new DebeziumException("Neither confirmed_flush_lsn nor restart_lsn could be found", e);
         }
         return confirmedFlushedLsn;
     }
@@ -332,7 +338,7 @@ public class PostgresConnection extends JdbcConnection {
             restartLsn = tryParseLsn(slotName, pluginName, database, rs, "restart_lsn");
         }
         catch (SQLException e) {
-            throw new ConnectException("restart_lsn could be found");
+            throw new DebeziumException("restart_lsn could be found");
         }
 
         return restartLsn;
@@ -349,13 +355,13 @@ public class PostgresConnection extends JdbcConnection {
             lsn = Lsn.valueOf(lsnStr);
         }
         catch (Exception e) {
-            throw new ConnectException("Value " + column + " in the pg_replication_slots table for slot = '"
+            throw new DebeziumException("Value " + column + " in the pg_replication_slots table for slot = '"
                     + slotName + "', plugin = '"
                     + pluginName + "', database = '"
                     + database + "' is not valid. This is an abnormal situation and the database status should be checked.");
         }
         if (!lsn.isValid()) {
-            throw new ConnectException("Invalid LSN returned from database");
+            throw new DebeziumException("Invalid LSN returned from database");
         }
         return lsn;
     }
@@ -530,7 +536,7 @@ public class PostgresConnection extends JdbcConnection {
     @Override
     public String quotedColumnIdString(String columnName) {
         if (columnName.contains("\"")) {
-            columnName = columnName.replaceAll("\"", "\"\"");
+            columnName = columnName.replace("\"", "\"\"");
         }
 
         return super.quotedColumnIdString(columnName);
