@@ -806,11 +806,11 @@ public abstract class AbstractIncrementalSnapshotChangeEventSource<P extends Par
         return table;
     }
 
-    private KeyMapper getKeyMapper() {
+    protected KeyMapper getKeyMapper() {
         return connectorConfig.getKeyMapper() == null ? table -> table.primaryKeyColumns() : connectorConfig.getKeyMapper();
     }
 
-    private List<Column> getQueryColumns(Table table) {
+    protected List<Column> getQueryColumns(Table table) {
         if (context != null && context.currentDataCollectionId() != null) {
             Optional<String> surrogateKey = context.currentDataCollectionId().getSurrogateKey();
             if (surrogateKey.isPresent()) {

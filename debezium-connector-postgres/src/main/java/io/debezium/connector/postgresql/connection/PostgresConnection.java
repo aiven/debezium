@@ -15,11 +15,13 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.apache.kafka.connect.errors.ConnectException;
 import org.postgresql.core.BaseConnection;
@@ -806,4 +808,49 @@ public class PostgresConnection extends JdbcConnection {
     public interface PostgresValueConverterBuilder {
         PostgresValueConverter build(TypeRegistry registry);
     }
+
+    public String buildUnionBasedSelectWithRowLimits(TableId tableId, int limit, String projection, List<String> boundConditions,
+                                                     Optional<String> additionalCondition, List<String> orderByColumnNames) {
+        final String TABLE_ALIAS = "t";
+        final String outerOrderBy = orderByColumnNames.stream()
+                .map(c -> quotedColumnIdString(TABLE_ALIAS) + "." + quotedColumnIdString(c))
+                .collect(Collectors.joining(", "));
+        final String innerOrderBy = orderByColumnNames.stream()
+                .map(this::quotedColumnIdString)
+                .collect(Collectors.joining(", "));
+        final String outerQueryPrefix = "SELECT * FROM (";
+        final String outerQuerySuffix = " ORDER BY " + outerOrderBy + " LIMIT " + limit;
+
+        StringBuilder queryBuilder = new StringBuilder(outerQueryPrefix);
+
+        if (boundConditions.size() > 1) {
+            // If there are multiple bound conditions exist (pk), use the complex UNION query
+            queryBuilder.append(boundConditions.stream()
+                    .map(condition -> buildSelectWithRowLimits(
+                            tableId,
+                            limit,
+                            projection,
+                            Optional.of(condition),
+                            additionalCondition,
+                            innerOrderBy))
+                    .collect(Collectors.joining(") UNION (", "(", ")")));
+
+            queryBuilder.append(") AS ")
+                    .append(TABLE_ALIAS)
+                    .append(outerQuerySuffix);
+        }
+        else {
+            // Otherwise just use the simple select query
+            return buildSelectWithRowLimits(
+                    tableId,
+                    limit,
+                    projection,
+                    boundConditions.stream().findFirst(),
+                    additionalCondition,
+                    innerOrderBy);
+        }
+
+        return queryBuilder.toString();
+    }
+
 }
