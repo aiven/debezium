@@ -605,6 +605,57 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         }
     }
 
+    /**
+     * The set of predefined types for query builders used on incremental snapshot chunk scans.
+     */
+    public enum IncrementalSnapshotChunkQueryBuilderType implements EnumeratedValue {
+
+        /**
+         * The default query builder will be used when building the incremental snapshot chunk query.
+         */
+        SIMPLE("simple"),
+
+        /**
+         * A complex multi-statement query builder that will be used when creating the incremental snapshot chunk query.
+         *
+         * The union based query builder uses UNION statements to create multi-statement queries to fetch the incremental snapshot chunks faster.
+         */
+        UNION_BASED("union_based");
+
+        private final String value;
+
+        IncrementalSnapshotChunkQueryBuilderType(String value) {
+            this.value = value;
+        }
+
+        @Override
+        public String getValue() {
+            return value;
+        }
+
+        /**
+         * Determine if the supplied value is one of the predefined options.
+         *
+         * @param value the configuration property value; may not be null
+         * @return the matching option, or null if no match is found
+         */
+        public static PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType parse(String value) {
+            if (value == null) {
+                return null;
+            }
+
+            value = value.trim();
+
+            for (PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType option : PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType.values()) {
+                if (option.getValue().equalsIgnoreCase(value)) {
+                    return option;
+                }
+            }
+
+            return null;
+        }
+    }
+
     public static final Field PUBLICATION_AUTOCREATE_MODE = Field.create("publication.autocreate.mode")
             .withDisplayName("Publication Auto Create Mode")
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED_REPLICATION, 9))
@@ -906,6 +957,16 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
     public static final Field SOURCE_INFO_STRUCT_MAKER = CommonConnectorConfig.SOURCE_INFO_STRUCT_MAKER
             .withDefault(PostgresSourceInfoStructMaker.class.getName());
 
+    public static final Field INCREMENTAL_SNAPSHOT_CHUNK_QUERY_BUILDER_TYPE = Field.create("incremental.snapshot.chunk.query.builder.type")
+            .withDisplayName("The type of the query builder for incremental snapshot chunk queries")
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 997))
+            .withEnum(PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType.class, PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType.SIMPLE)
+            .withWidth(Width.SHORT)
+            .withImportance(Importance.LOW)
+            .withDescription("Specify the type of query builder used for incremental snapshot chunk queries: "
+                    + "'simple' (the default) Simple query builder, that creates a single generic SQL query, compatible with many connectors; "
+                    + "'union_based' a more complex query builder, that creates a faster UNION based multi-statement query, tested with PostgreSQL connector;");
+
     private final LogicalDecodingMessageFilter logicalDecodingMessageFilter;
     private final HStoreHandlingMode hStoreHandlingMode;
     private final IntervalHandlingMode intervalHandlingMode;
@@ -913,6 +974,7 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
     private final SchemaRefreshMode schemaRefreshMode;
     private final boolean flushLsnOnSource;
     private final ReplicaIdentityMapper replicaIdentityMapper;
+    private final IncrementalSnapshotChunkQueryBuilderType incrementalSnapshotChunkQueryBuilderType;
 
     public PostgresConnectorConfig(Configuration config) {
         super(
@@ -933,6 +995,7 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         this.flushLsnOnSource = config.getBoolean(SHOULD_FLUSH_LSN_IN_SOURCE_DB);
         final var replicaIdentityMapping = config.getString(REPLICA_IDENTITY_AUTOSET_VALUES);
         this.replicaIdentityMapper = (replicaIdentityMapping != null) ? new ReplicaIdentityMapper(replicaIdentityMapping) : null;
+        this.incrementalSnapshotChunkQueryBuilderType = IncrementalSnapshotChunkQueryBuilderType.parse(config.getString(INCREMENTAL_SNAPSHOT_CHUNK_QUERY_BUILDER_TYPE));
     }
 
     protected String hostname() {
@@ -1047,6 +1110,10 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
     @Override
     protected SourceInfoStructMaker<? extends AbstractSourceInfo> getSourceInfoStructMaker(Version version) {
         return getSourceInfoStructMaker(SOURCE_INFO_STRUCT_MAKER, Module.name(), Module.version(), this);
+    }
+
+    public IncrementalSnapshotChunkQueryBuilderType getIncrementalSnapshotQueryBuilderType() {
+        return incrementalSnapshotChunkQueryBuilderType;
     }
 
     private static final ConfigDefinition CONFIG_DEFINITION = RelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()

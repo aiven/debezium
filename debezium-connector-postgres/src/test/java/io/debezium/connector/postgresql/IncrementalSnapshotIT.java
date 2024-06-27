@@ -12,9 +12,11 @@ import static org.assertj.core.api.Assertions.entry;
 
 import java.io.File;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.apache.kafka.connect.data.Struct;
 import org.junit.After;
@@ -23,6 +25,8 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
@@ -38,6 +42,7 @@ import io.debezium.relational.RelationalDatabaseConnectorConfig;
 import io.debezium.util.Collect;
 import io.debezium.util.Testing;
 
+@RunWith(Parameterized.class)
 public class IncrementalSnapshotIT extends AbstractIncrementalSnapshotTest<PostgresConnector> {
 
     private static final String TOPIC_NAME = "test_server.s1.a";
@@ -52,6 +57,16 @@ public class IncrementalSnapshotIT extends AbstractIncrementalSnapshotTest<Postg
             + "ALTER TABLE s1.debezium_signal REPLICA IDENTITY FULL;"
             + "CREATE TYPE enum_type AS ENUM ('UP', 'DOWN', 'LEFT', 'RIGHT', 'STORY');"
             + "CREATE TABLE s1.enumpk (pk enum_type, aa integer, PRIMARY KEY(pk));";
+
+    @Parameterized.Parameter
+    public String incrementalSnapshotQueryBuilderType;
+
+    @Parameterized.Parameters
+    public static List<String> incrementalSnapshotQueryBuilders() {
+        return Arrays.stream(PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType.values())
+                .map(PostgresConnectorConfig.IncrementalSnapshotChunkQueryBuilderType::getValue)
+                .collect(Collectors.toList());
+    }
 
     @Before
     public void before() throws SQLException {
@@ -103,6 +118,7 @@ public class IncrementalSnapshotIT extends AbstractIncrementalSnapshotTest<Postg
                 .with(CommonConnectorConfig.SIGNAL_ENABLED_CHANNELS, "source")
                 .with(CommonConnectorConfig.SIGNAL_POLL_INTERVAL_MS, 5)
                 .with(RelationalDatabaseConnectorConfig.MSG_KEY_COLUMNS, "s1.a42:pk1,pk2,pk3,pk4")
+                .with(PostgresConnectorConfig.INCREMENTAL_SNAPSHOT_CHUNK_QUERY_BUILDER_TYPE, incrementalSnapshotQueryBuilderType)
                 // DBZ-4272 required to allow dropping columns just before an incremental snapshot
                 .with("database.autosave", "conservative");
     }
